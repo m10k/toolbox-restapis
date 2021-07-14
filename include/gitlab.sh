@@ -17,7 +17,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 __init() {
-	if ! include "log" "json"; then
+	if ! include "is" "log" "json"; then
 		return 1
 	fi
 
@@ -69,26 +69,122 @@ _gitlab_put() {
 	return 0
 }
 
-gitlab_import_status() {
+_gitlab_list_projects_page() {
+	local host="$1"
+	local token="$2"
+	local perpage="$3"
+	local page="$4"
+
+	local url
+	local results
+
+	url="$host/api/v4/projects?simple=true&per_page=$perpage&page=$page"
+
+	if ! results=$(_gitlab_get "$token" "$url"); then
+		return 1
+	fi
+
+	if ! jq -e -r ".[] | \"\(.id) \(.path_with_namespace)\"" <<< "$results"; then
+		return 1
+	fi
+
+	return 0
+}
+
+gitlab_user_list() {
+	local host="$1"
+	local token="$2"
+
+	local url
+
+	url="$host/api/v4/users?per_page=512"
+
+	if ! _gitlab_get "$token" "$url"; then
+		return 1
+	fi
+
+	return 0
+}
+
+gitlab_user_list_short() {
+	local host="$1"
+	local token="$2"
+
+	local resp
+
+	if ! resp=$(gitlab_user_list "$host" "$token"); then
+		return 1
+	fi
+
+	if ! jq -e -r ".[] | \"\(.id) \(.username) \(.name)\"" <<< "$resp"; then
+		return 1
+	fi
+
+	return 0
+}
+
+gitlab_user_get_id() {
+	local host="$1"
+	local token="$2"
+	local user="$3"
+
+	local resp
+	local uid
+	local username
+	local fullname
+
+	if ! resp=$(gitlab_user_list_short "$host" "$token"); then
+		return 1
+	fi
+
+	while read -r uid username fullname; do
+		if [[ "$username" == "$user" ]]; then
+			echo "$uid"
+			return 0
+		fi
+	done <<< "$resp"
+
+	return 1
+}
+
+gitlab_user_whoami() {
+	local host="$1"
+	local token="$2"
+
+	local url
+
+	url="$host/api/v4/user"
+
+	if ! _gitlab_get "$token" "$url"; then
+		return 1
+	fi
+
+	return 0
+}
+
+gitlab_project_get_import_status() {
 	local host="$1"
 	local token="$2"
 	local project="$3"
 
-        local url
-        local res
+	local url
+	local res
 
-        id=$(_gitlab_urlencode "$project")
-        url="$host/api/v4/projects/$id"
+	id=$(_gitlab_urlencode "$project")
+	url="$host/api/v4/projects/$id"
 
-        if ! res=$(_gitlab_get "$token" "$url"); then
-                return 1
-        fi
+	if ! res=$(_gitlab_get "$token" "$url"); then
+		return 1
+	fi
 
-        echo "$res" | jq -r ".import_status"
+	if ! jq -r -e ".import_status" <<< "$res"; then
+		return 1
+	fi
+
         return 0
 }
 
-gitlab_download_file() {
+gitlab_project_download_file() {
 	local host="$1"
 	local token="$2"
 	local project="$3"
@@ -108,75 +204,7 @@ gitlab_download_file() {
 	return 0
 }
 
-gitlab_get_users() {
-	local host="$1"
-	local token="$2"
-
-	local url
-
-	url="$host/api/v4/users?per_page=512"
-
-	if ! _gitlab_get "$token" "$url"; then
-		return 1
-	fi
-
-	return 0
-}
-
-gitlab_user_list() {
-	local host="$1"
-	local token="$2"
-
-	local resp
-
-	if ! resp=$(gitlab_get_users "$host" "$token"); then
-		return 1
-	fi
-
-	echo "$resp" | jq -r ".[] | \"\(.id) \(.username) \(.name)\""
-	return 0
-}
-
-gitlab_get_current_user() {
-	local host="$1"
-	local token="$2"
-
-	local url
-
-	url="$host/api/v4/user"
-
-	if ! _gitlab_get "$token" "$url"; then
-		return 1
-	fi
-
-	return 0
-}
-
-gitlab_get_user_id() {
-	local host="$1"
-	local token="$2"
-	local user="$3"
-
-	local resp
-	local uid
-	local username
-	local fullname
-
-	if ! resp=$(gitlab_user_list "$host" "$token"); then
-		return 1
-	fi
-
-	while read -r uid username fullname; do
-		if [[ "$username" == "$user" ]]; then
-			echo "$uid"
-			return 0
-		fi
-	done <<< "$resp"
-
-	return 1
-}
-
-gitlab_fork() {
+gitlab_project_fork_async() {
 	local host="$1"
 	local token="$2"
 	local project="$3"
@@ -200,7 +228,7 @@ gitlab_fork() {
 	return 0
 }
 
-gitlab_fork_sync() {
+gitlab_project_fork() {
 	local host="$1"
 	local token="$2"
 	local project="$3"
@@ -209,13 +237,13 @@ gitlab_fork_sync() {
 	local resp
 	local fork_id
 
-	if ! resp=$(gitlab_fork "$host" "$token" "$project" "$namespace"); then
-		echo "Could not fork project" 1>&2
+	if ! resp=$(gitlab_project_fork_async "$host" "$token" "$project" "$namespace"); then
+		log_error "Could not fork $project to $namespace"
 		return 1
 	fi
 
-	if ! fork_id=$(echo "$resp" | jq ".id"); then
-		echo "Could not get id of fork" 1>&2
+	if ! fork_id=$(jq -e -r ".id" <<< "$resp"); then
+		log_error "Invalid response from gitlab_project_fork_async()"
 		return 1
 	fi
 
@@ -225,15 +253,15 @@ gitlab_fork_sync() {
 	while true; do
 		local import_status
 
-		if ! import_status=$(gitlab_import_status "$host" \
-							  "$token" \
-							  "$fork_id"); then
-			echo "Could not get import status of fork" 1>&2
+		if ! import_status=$(gitlab_project_get_import_status "$host"  \
+								      "$token" \
+								      "$fork_id"); then
+			log_error "Could not get import status of $fork_id"
 			return 1
 		fi
 
 		if [[ "$import_status" == "none" ]] ||
-			   [[ "$import_status" == "finished" ]]; then
+		   [[ "$import_status" == "finished" ]]; then
 			break
 		fi
 
@@ -243,7 +271,7 @@ gitlab_fork_sync() {
 	return 0
 }
 
-gitlab_create_branch() {
+gitlab_project_create_branch() {
 	local host="$1"
 	local token="$2"
 	local project="$3"
@@ -254,7 +282,10 @@ gitlab_create_branch() {
 	local url
 
 	id=$(_gitlab_urlencode "$project")
-	data=$(json_make "id" "$id" "branch" "$branch" "ref" "$ref")
+	data=$(json_object "id"     "$id"    \
+			   "ref"    "$ref"   \
+			   "branch" "$branch")
+
 	url="$host/api/v4/projects/$id/repository/branches"
 
 	if ! _gitlab_post "$token" "$url" "$data"; then
@@ -264,7 +295,29 @@ gitlab_create_branch() {
 	return 0
 }
 
-gitlab_project_get_branches() {
+gitlab_project_get_id() {
+	local host="$1"
+	local token="$2"
+	local project="$3"
+
+	local url
+	local resp
+
+	project=$(_gitlab_urlencode "$project")
+	url="$host/api/v4/projects/$project"
+
+	if ! resp=$(_gitlab_get "$token" "$url"); then
+		return 1
+	fi
+
+	if ! jq -e -r ".id" <<< "$resp"; then
+		return 1
+	fi
+
+	return 0
+}
+
+gitlab_project_get_branch_names() {
 	local host="$1"
 	local token="$2"
 	local project="$3"
@@ -279,7 +332,7 @@ gitlab_project_get_branches() {
 		return 1
 	fi
 
-	if ! echo "$resp" | jq -r ".[].name"; then
+	if ! jq -e -r ".[].name" <<< "$resp"; then
 		return 1
 	fi
 
@@ -295,7 +348,7 @@ gitlab_project_get_members() {
 	local url
 	local resp
 
-	if ! project_id=$(gitlab_get_project_id "$host"  \
+	if ! project_id=$(gitlab_project_get_id "$host"  \
 						"$token" \
 						"$project"); then
 		return 1
@@ -310,7 +363,7 @@ gitlab_project_get_members() {
 	return 0
 }
 
-gitlab_project_get_merge_requests() {
+gitlab_project_get_mergerequests() {
 	local host="$1"
 	local token="$2"
 	local project="$3"
@@ -329,7 +382,41 @@ gitlab_project_get_merge_requests() {
 	return 0
 }
 
-gitlab_project_mergerequest_get_votes() {
+gitlab_project_list() {
+	local host="$1"
+	local token="$2"
+
+	local page
+	local perpage
+
+	page=1
+	perpage=50
+
+	while true; do
+		local projects
+		local num
+
+		if ! projects=$(_gitlab_list_projects_page "$host" \
+							   "$token" \
+							   "$perpage" \
+							   "$page"); then
+			return 1
+		fi
+
+		num=$(echo "$projects" | wc -l)
+		echo "$projects"
+
+		if ((num < perpage)); then
+			break
+		fi
+
+		((page++))
+	done
+
+	return 0
+}
+
+gitlab_mergerequest_get_votes() {
 	local host="$1"
 	local token="$2"
 	local project="$3"
@@ -339,7 +426,7 @@ gitlab_project_mergerequest_get_votes() {
 	local url
 	local resp
 
-	if ! project_id=$(gitlab_get_project_id "$host" "$token" "$project"); then
+	if ! project_id=$(gitlab_project_get_id "$host" "$token" "$project"); then
 		return 1
 	fi
 
@@ -352,7 +439,7 @@ gitlab_project_mergerequest_get_votes() {
 	return 0
 }
 
-gitlab_project_mergerequest_comment() {
+gitlab_mergerequest_add_comment() {
 	local host="$1"
 	local token="$2"
 	local project="$3"
@@ -363,7 +450,7 @@ gitlab_project_mergerequest_comment() {
 	local url
 	local data
 
-	if ! project_id=$(gitlab_get_project_id "$host" "$token" "$project"); then
+	if ! project_id=$(gitlab_project_get_id "$host" "$token" "$project"); then
 		return 1
 	fi
 
@@ -377,7 +464,7 @@ gitlab_project_mergerequest_comment() {
 	return 0
 }
 
-gitlab_list_merge_requests() {
+gitlab_mergerequest_get_list() {
 	local host="$1"
 	local token="$2"
 	local scope="$3"
@@ -399,7 +486,7 @@ gitlab_list_merge_requests() {
 	return 0
 }
 
-gitlab_project_merge_merge_request() {
+gitlab_mergerequest_merge() {
 	local host="$1"
 	local token="$2"
 	local project="$3"
@@ -407,112 +494,25 @@ gitlab_project_merge_merge_request() {
 
 	local project_id
 	local url
-	local resp
 
-	if [[ "$project" =~ ^[0-9]+$ ]]; then
+	if is_digits "$project"; then
 		project_id="$project"
-	elif ! project_id=$(gitlab_get_project_id "$host" "$token" "$project"); then
+
+	elif ! project_id=$(gitlab_project_get_id "$host" "$token" "$project"); then
+		log_error "Could not get project id of $project"
 		return 1
 	fi
 
 	url="$host/api/v4/projects/$project_id/merge_requests/$mergerequest/merge"
 
-	if ! resp=$(_gitlab_put "$token" "$url"); then
+	if ! _gitlab_put "$token" "$url"; then
 		return 1
 	fi
 
-	echo "$resp"
 	return 0
 }
 
-gitlab_get_project_id() {
-	local host="$1"
-	local token="$2"
-	local project="$3"
-
-	local url
-	local resp
-
-	project=$(_gitlab_urlencode "$project")
-	url="$host/api/v4/projects/$project"
-
-	if ! resp=$(_gitlab_get "$token" "$url"); then
-		return 1
-	fi
-
-	echo "$resp" | jq ".id"
-	return 0
-}
-
-gitlab_list_projects_page() {
-	local host="$1"
-	local token="$2"
-	local perpage="$3"
-	local page="$4"
-
-	local url
-	local results
-
-	url="$host/api/v4/projects?simple=true&per_page=$perpage&page=$page"
-
-	if ! results=$(_gitlab_get "$token" "$url"); then
-		return 1
-	fi
-
-	echo "$results" | jq -r ".[] | \"\(.id) \(.path_with_namespace)\""
-
-	return 0
-}
-
-gitlab_list_projects() {
-	local host="$1"
-	local token="$2"
-
-	local page
-	local perpage
-
-	page=1
-	perpage=50
-
-	while true; do
-		local projects
-		local num
-
-		if ! projects=$(gitlab_list_projects_page "$host" \
-							  "$token" \
-							  "$perpage" \
-							  "$page"); then
-			return 1
-		fi
-
-		num=$(echo "$projects" | wc -l)
-		echo "$projects"
-
-		if ((num < perpage)); then
-			break
-		fi
-
-		((page++))
-	done
-
-	return 0
-}
-
-#
-# gitlab_merge_request - Create a new merge request
-#
-# SYNOPSIS
-#  gitlab_merge_request "$host" "$token" "$source" "$destination"
-#                       "$title" "$assignee" "$description"
-#
-# DESCRIPTION
-#  The gitlab_merge_request function creates a new merge request from the
-#  repository:branch identified by $source to the repository:branch identified
-#  by $destination. The title, assignee, and description of the merge request
-#  will be set according to the $title, $assignee, and $description arguments,
-#  respectively.
-#
-gitlab_merge_request() {
+gitlab_mergerequest_new() {
 	local host="$1"
 	local token="$2"
 	local source="$3"
@@ -535,40 +535,41 @@ gitlab_merge_request() {
 	source_branch="${source##*:}"
 	destination_branch="${destination##*:}"
 
-	if ! assignee_id=$(gitlab_get_user_id "$host" \
+	if ! assignee_id=$(gitlab_user_get_id "$host" \
 					      "$token" \
 					      "$assignee"); then
-		echo "Invalid user: $assignee" 1>&2
+		log_error "Invalid user: $assignee"
 		return 1
 	fi
 
 	if [ -z "$source_branch" ]; then
-		echo "Invalid source branch" 1>&2
+		log_error "Invalid source branch"
 		return 1
 	fi
 
 	if [ -z "$destination_branch" ]; then
-		echo "Invalid destination branch" 1>&2
+		log_error "Invalid destination branch"
 		return 1
 	fi
 
-	if ! source_id=$(gitlab_get_project_id "$host" "$token" "$source_name"); then
-		echo "Could not get project id for $source_name" 1>&2
+	if ! source_id=$(gitlab_project_get_id "$host" "$token" "$source_name"); then
+		log_error "Could not get project id for $source_name"
 		return 1
 	fi
 
-	if ! destination_id=$(gitlab_get_project_id "$host" "$token" "$destination_name"); then
-		echo "Could not get project id for $destination_name" 1>&2
+	if ! destination_id=$(gitlab_project_get_id "$host" "$token" "$destination_name"); then
+		log_error "Could not get project id for $destination_name"
 		return 1
 	fi
 
-	data=$(json_make "id" "$source_id" \
-			 "target_project_id" "$destination_id" \
-			 "source_branch" "$source_branch" \
-			 "target_branch" "$destination_branch" \
-			 "title" "$title" \
-			 "assignee_id" "$assignee_id" \
-			 "description" "$description")
+	data=$(json_object "id" "$source_id"                     \
+			   "title" "$title"                      \
+			   "target_project_id" "$destination_id" \
+			   "source_branch" "$source_branch"      \
+			   "target_branch" "$destination_branch" \
+			   "assignee_id" "$assignee_id"          \
+			   "description" "$description")
+
 	url="$host/api/v4/projects/$source_id/merge_requests"
 
 	if ! _gitlab_post "$token" "$url" "$data"; then
