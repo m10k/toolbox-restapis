@@ -1,0 +1,15 @@
+Source: toolbox-restapis
+Priority: optional
+Maintainer: Matthias Kruk <m@m10k.eu>
+Build-Depends: debhelper (>= 9), make, coreutils, findutils
+Standards-Version: 3.9.8
+Section: shells
+Homepage: https://m10k.eu/toolbox
+
+Package: toolbox-restapis
+Section: shells
+Architecture: all
+Depends: toolbox, curl, jq, coreutils
+Description: Toolbox modules for interaction with REST-ful APIs
+ This package provides toolbox modules for interacting with various
+ REST-ful APIs from the shell.

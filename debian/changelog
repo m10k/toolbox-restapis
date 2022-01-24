@@ -1,0 +1,7 @@
+toolbox-restapis (0.1-1) unstable; urgency=medium
+
+  * New modules:
+    - iruca: Functions for interacting with iruca.co
+    - gitlab: Functions for interacting with Gitlab (API V4)
+
+ -- Matthias Kruk <m@m10k.eu>  Mon, 24 Jan 2022 09:44:11 +0900
