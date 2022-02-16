@@ -1,4 +1,4 @@
-PHONY = install uninstall test deb
+PHONY = install uninstall clean
 
 ifeq ($(PREFIX), )
 	PREFIX = /usr
@@ -7,8 +7,6 @@ endif
 all:
 
 clean:
-
-test:
 
 install:
 	chown -R root.root include
@@ -20,5 +18,6 @@ install:
 uninstall:
 	rm $(DESTDIR)$(PREFIX)/share/toolbox/include/iruca.sh
 	rm $(DESTDIR)$(PREFIX)/share/toolbox/include/gitlab.sh
+	rm $(DESTDIR)$(PREFIX)/share/toolbox/include/slack.sh
 
 .PHONY: $(PHONY)
