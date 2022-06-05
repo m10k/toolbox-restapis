@@ -25,9 +25,23 @@ __init() {
 }
 
 _gitlab_urlencode() {
-        local str="$1"
+	local str="$1"
 
-        echo "${str//\//%2F}"
+	declare -A patterns
+	local pattern
+
+	patterns["/"]="%2F"
+	patterns[","]="%2C"
+
+	for pattern in "${!patterns[@]}"; do
+		local replace
+
+		replace="${patterns[$pattern]}"
+		str="${str//"$pattern"/"$replace"}"
+	done
+
+	echo "$str"
+	return 0
 }
 
 _gitlab_get() {
