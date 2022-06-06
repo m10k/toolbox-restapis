@@ -97,6 +97,22 @@ _gitlab_post() {
 	return 1
 }
 
+_gitlab_delete() {
+	local token="$1"
+	local url="$2"
+
+	local res
+
+	if ! res=$(curl --silent --location -X DELETE    \
+			--header "Private-Token: $token" \
+			"$url"); then
+		return 1
+	fi
+
+	echo "$res"
+	return 0
+}
+
 _gitlab_put() {
 	local token="$1"
 	local url="$2"
@@ -453,6 +469,105 @@ gitlab_project_list() {
 		((page++))
 	done
 
+	return 0
+}
+
+gitlab_project_list_hooks() {
+	local host="$1"
+	local token="$2"
+	local project="$3"
+
+	local project_id
+	local url
+	local resp
+
+	if ! project_id=$(gitlab_project_get_id "$host" "$token" "$project"); then
+		return 1
+	fi
+
+	url="$host/api/v4/projects/$project_id/hooks"
+	if ! resp=$(_gitlab_get "$token" "$url"); then
+		return 1
+	fi
+
+	echo "$resp"
+	return 0
+}
+
+gitlab_project_get_hook() {
+	local host="$1"
+	local token="$2"
+	local project="$3"
+	local hook="$4"
+
+	local project_id
+	local url
+	local resp
+
+	if ! project_id=$(gitlab_project_get_id "$host" "$token" "$project"); then
+		return 1
+	fi
+
+	url="$host/api/v4/projects/$project_id/$hook"
+	if ! resp=$(_gitlab_get "$token" "$url"); then
+		return 1
+	fi
+
+	echo "$resp"
+	return 0
+}
+
+gitlab_project_add_hook() {
+	local host="$1"
+	local token="$2"
+	local project="$3"
+	local hook_url="$4"
+	local branch="$5"
+
+	local project_id
+	local hook_data
+	local url
+	local resp
+
+	if ! project_id=$(gitlab_project_get_id "$host" "$token" "$project"); then
+		return 1
+	fi
+
+	url="$host/api/v4/projects/$project_id/hooks"
+	hook_data=$(json_object "url"                       "$hook_url" \
+	                        "push_events_branch_filter" "$branch")
+
+	log_info "POSTing $hook_data to $url"
+	if ! resp=$(_gitlab_post "$token" "$url" "$hook_data"); then
+		log_highlight "Response from Gitlab" <<< "$resp" | log_error
+		return 1
+	fi
+
+	echo "$resp"
+	return 0
+}
+
+gitlab_project_remove_hook() {
+	local host="$1"
+	local token="$2"
+	local project="$3"
+	local hook="$4"
+
+	local project_id
+	local url
+	local resp
+
+	if ! project_id=$(gitlab_project_get_id "$host" "$token" "$project"); then
+		return 1
+	fi
+
+	url="$host/api/v4/projects/$project_id/hooks/$hook"
+
+	if ! resp=$(_gitlab_delete "$token" "$url"); then
+		return 1
+	fi
+
+	echo "$resp"
 	return 0
 }
 
