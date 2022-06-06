@@ -45,30 +45,56 @@ _gitlab_urlencode() {
 }
 
 _gitlab_get() {
-        local token="$1"
-        local url="$2"
+	local token="$1"
+	local url="$2"
 
-        if ! curl --silent --location -X GET \
-	     --header "Private-Token: $token" "$url"; then
-                return 1
-        fi
+	local res
+	local error
+	local description
 
-        return 0
+	if ! res=$(curl --silent --location -X GET \
+	                --header "Private-Token: $token" "$url"); then
+		return 1
+	fi
+
+	if ! error=$(json_object_get "$res" "error" 2>/dev/null) ||
+	   [[ "$error" == "null" ]]; then
+		echo "$res"
+		return 0
+	fi
+
+	description=$(json_object_get "$res" "error_description")
+
+	log_error "Gitlab: $error: $description"
+	return 1
 }
 
 _gitlab_post() {
-        local token="$1"
-        local url="$2"
-        local data="$3"
+	local token="$1"
+	local url="$2"
+	local data="$3"
 
-        if ! curl --silent --location -X POST \
-             --header "Private-Token: $token" \
-             --header "Content-Type: application/json" \
-             --data "$data" "$url"; then
-                return 1
-        fi
+	local res
+	local error
+	local description
 
-        return 0
+	if ! res=$(curl --silent --location -X POST               \
+	                --header "Private-Token: $token"          \
+	                --header "Content-Type: application/json" \
+	                --data "$data" "$url"); then
+		return 1
+	fi
+
+	if ! error=$(json_object_get "$res" "error" 2>/dev/null) ||
+	   [[ "$error" == "null" ]]; then
+		echo "$res"
+		return 0
+	fi
+
+	description=$(json_object_get "$res" "error_description")
+
+	log_error "Gitlab: $error: $description"
+	return 1
 }
 
 _gitlab_put() {
